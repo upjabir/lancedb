@@ -15,6 +15,7 @@ export {
 } from "./embedding_function";
 
 export * from "./registry";
+export { RateLimitOptions, RateLimiter, RateLimitedFunction } from "../util";
 
 /**
  * Create a schema with embedding functions.

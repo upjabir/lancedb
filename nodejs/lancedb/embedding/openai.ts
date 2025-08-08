@@ -10,6 +10,15 @@ import { register } from "./registry";
 export type OpenAIOptions = {
   apiKey: string;
   model: EmbeddingCreateParams["model"];
+  /** Rate limiting configuration for OpenAI API calls */
+  rateLimit?: {
+    /** Maximum requests per time window (default: 3000 per minute for tier 1) */
+    maxRequests: number;
+    /** Time window in milliseconds (default: 60000 for 1 minute) */
+    windowMs: number;
+    /** Optional delay between requests in milliseconds */
+    delayMs?: number;
+  };
 };
 
 @register("openai")
@@ -76,10 +85,14 @@ export class OpenAIEmbeddingFunction extends EmbeddingFunction<
   }
 
   async computeSourceEmbeddings(data: string[]): Promise<number[][]> {
-    const response = await this.#openai.embeddings.create({
-      model: this.#modelName,
-      input: data,
-    });
+    const apiCall = async () => {
+      return await this.#openai.embeddings.create({
+        model: this.#modelName,
+        input: data,
+      });
+    };
+
+    const response = await this.executeWithRateLimit(apiCall);
 
     const embeddings: number[][] = [];
     for (let i = 0; i < response.data.length; i++) {
@@ -92,11 +105,15 @@ export class OpenAIEmbeddingFunction extends EmbeddingFunction<
     if (typeof data !== "string") {
       throw new Error("Data must be a string");
     }
-    const response = await this.#openai.embeddings.create({
-      model: this.#modelName,
-      input: data,
-    });
+    
+    const apiCall = async () => {
+      return await this.#openai.embeddings.create({
+        model: this.#modelName,
+        input: data,
+      });
+    };
 
+    const response = await this.executeWithRateLimit(apiCall);
     return response.data[0].embedding;
   }
 }
