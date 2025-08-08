@@ -373,4 +373,195 @@ describe("embedding functions", () => {
       expect(stringSchema3).toEqual(stringExpectedSchema);
     },
   );
+
+  describe("rate limiting", () => {
+    it("should support rate limiting configuration", async () => {
+      @register("rate-limited-mock")
+      class RateLimitedMockEmbeddingFunction extends EmbeddingFunction<string> {
+        private callCount = 0;
+        private callTimes: number[] = [];
+
+        constructor(options: { rateLimit?: { maxRequests: number; windowMs: number } } = {}) {
+          super();
+          this.resolveVariables(options);
+        }
+
+        ndims() {
+          return 3;
+        }
+
+        embeddingDataType(): Float {
+          return new Float32();
+        }
+
+        async computeQueryEmbeddings(data: string) {
+          const apiCall = async () => {
+            this.callCount++;
+            this.callTimes.push(Date.now());
+            return [1, 2, 3];
+          };
+
+          return this.executeWithRateLimit(apiCall);
+        }
+
+        async computeSourceEmbeddings(data: string[]) {
+          const apiCall = async () => {
+            this.callCount++;
+            this.callTimes.push(Date.now());
+            return Array.from({ length: data.length }).fill([1, 2, 3]) as number[][];
+          };
+
+          return this.executeWithRateLimit(apiCall);
+        }
+
+        getCallCount() {
+          return this.callCount;
+        }
+
+        getCallTimes() {
+          return this.callTimes;
+        }
+      }
+
+      const func = new RateLimitedMockEmbeddingFunction({
+        rateLimit: {
+          maxRequests: 2,
+          windowMs: 1000, // 2 requests per second
+        },
+      });
+
+      const db = await connect(tmpDir.name);
+      const table = await db.createTable(
+        "rate_limited_test",
+        [{ id: 1, text: "hello" }],
+        {
+          embeddingFunction: {
+            function: func,
+            sourceColumn: "text",
+          },
+        },
+      );
+
+      // First call should succeed immediately
+      const start = Date.now();
+      await table.add([{ id: 2, text: "world" }]);
+      
+      // Second call should succeed immediately (within rate limit)
+      await table.add([{ id: 3, text: "test" }]);
+      
+      // Third call should be rate limited and take longer
+      await table.add([{ id: 4, text: "rate limited" }]);
+      const end = Date.now();
+
+      expect(func.getCallCount()).toBe(4); // Initial + 3 adds
+      expect(end - start).toBeGreaterThan(400); // Should take some time due to rate limiting
+    });
+
+    it("should work without rate limiting when not configured", async () => {
+      @register("no-rate-limit-mock")
+      class NoRateLimitMockEmbeddingFunction extends EmbeddingFunction<string> {
+        private callCount = 0;
+
+        ndims() {
+          return 3;
+        }
+
+        embeddingDataType(): Float {
+          return new Float32();
+        }
+
+        async computeQueryEmbeddings(data: string) {
+          const apiCall = async () => {
+            this.callCount++;
+            return [1, 2, 3];
+          };
+
+          return this.executeWithRateLimit(apiCall);
+        }
+
+        async computeSourceEmbeddings(data: string[]) {
+          const apiCall = async () => {
+            this.callCount++;
+            return Array.from({ length: data.length }).fill([1, 2, 3]) as number[][];
+          };
+
+          return this.executeWithRateLimit(apiCall);
+        }
+
+        getCallCount() {
+          return this.callCount;
+        }
+      }
+
+      const func = new NoRateLimitMockEmbeddingFunction();
+      const db = await connect(tmpDir.name);
+      
+      const start = Date.now();
+      const table = await db.createTable(
+        "no_rate_limit_test",
+        [
+          { id: 1, text: "hello" },
+          { id: 2, text: "world" },
+          { id: 3, text: "test" },
+        ],
+        {
+          embeddingFunction: {
+            function: func,
+            sourceColumn: "text",
+          },
+        },
+      );
+      const end = Date.now();
+
+      expect(func.getCallCount()).toBe(1); // Single batch call
+      expect(end - start).toBeLessThan(1000); // Should be fast without rate limiting
+    });
+
+    it("should provide rate limit status", async () => {
+      @register("status-mock")
+      class StatusMockEmbeddingFunction extends EmbeddingFunction<string> {
+        constructor() {
+          super();
+          this.resolveVariables({
+            rateLimit: {
+              maxRequests: 5,
+              windowMs: 1000,
+            },
+          });
+        }
+
+        ndims() {
+          return 3;
+        }
+
+        embeddingDataType(): Float {
+          return new Float32();
+        }
+
+        async computeQueryEmbeddings(data: string) {
+          const apiCall = async () => [1, 2, 3];
+          return this.executeWithRateLimit(apiCall);
+        }
+
+        async computeSourceEmbeddings(data: string[]) {
+          const apiCall = async () => Array.from({ length: data.length }).fill([1, 2, 3]) as number[][];
+          return this.executeWithRateLimit(apiCall);
+        }
+      }
+
+      const func = new StatusMockEmbeddingFunction();
+      
+      // Initially no status (no calls made yet)
+      expect(func.getRateLimitStatus()).toBeNull();
+      
+      // Make a call to initialize rate limiter
+      await func.computeQueryEmbeddings("test");
+      
+      // Now should have status
+      const status = func.getRateLimitStatus();
+      expect(status).not.toBeNull();
+      expect(status?.availableTokens).toBeLessThan(5);
+      expect(typeof status?.timeUntilNextToken).toBe("number");
+    });
+  });
 });

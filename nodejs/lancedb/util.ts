@@ -80,3 +80,119 @@ export class TTLCache {
     this.cache.delete(key);
   }
 }
+
+/**
+ * Rate limiting configuration options
+ */
+export interface RateLimitOptions {
+  /** Maximum number of requests per time window */
+  maxRequests: number;
+  /** Time window in milliseconds */
+  windowMs: number;
+  /** Optional delay between requests in milliseconds */
+  delayMs?: number;
+}
+
+/**
+ * Token bucket rate limiter implementation
+ */
+export class RateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private readonly maxTokens: number;
+  private readonly refillRate: number; // tokens per millisecond
+  private readonly delayMs: number;
+
+  constructor(options: RateLimitOptions) {
+    this.maxTokens = options.maxRequests;
+    this.tokens = this.maxTokens;
+    this.lastRefill = Date.now();
+    this.refillRate = options.maxRequests / options.windowMs;
+    this.delayMs = options.delayMs || 0;
+  }
+
+  /**
+   * Attempt to consume a token. Returns true if successful, false if rate limited.
+   */
+  tryConsume(tokensRequested = 1): boolean {
+    this.refillTokens();
+    
+    if (this.tokens >= tokensRequested) {
+      this.tokens -= tokensRequested;
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Wait until tokens are available, then consume them
+   */
+  async consume(tokensRequested = 1): Promise<void> {
+    while (!this.tryConsume(tokensRequested)) {
+      // Calculate wait time until next token is available
+      const tokensNeeded = tokensRequested - this.tokens;
+      const waitTime = Math.max(tokensNeeded / this.refillRate, this.delayMs);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
+
+  /**
+   * Get the current number of available tokens
+   */
+  getAvailableTokens(): number {
+    this.refillTokens();
+    return this.tokens;
+  }
+
+  /**
+   * Get time until next token is available (in milliseconds)
+   */
+  getTimeUntilNextToken(): number {
+    this.refillTokens();
+    if (this.tokens >= 1) {
+      return 0;
+    }
+    return (1 - this.tokens) / this.refillRate;
+  }
+
+  private refillTokens(): void {
+    const now = Date.now();
+    const timePassed = now - this.lastRefill;
+    const tokensToAdd = timePassed * this.refillRate;
+    
+    this.tokens = Math.min(this.maxTokens, this.tokens + tokensToAdd);
+    this.lastRefill = now;
+  }
+}
+
+/**
+ * Rate-limited function wrapper that applies rate limiting to async functions
+ */
+export class RateLimitedFunction<T extends (...args: any[]) => Promise<any>> {
+  private rateLimiter: RateLimiter;
+  private originalFunction: T;
+
+  constructor(fn: T, options: RateLimitOptions) {
+    this.originalFunction = fn;
+    this.rateLimiter = new RateLimiter(options);
+  }
+
+  /**
+   * Execute the function with rate limiting applied
+   */
+  async execute(...args: Parameters<T>): Promise<Awaited<ReturnType<T>>> {
+    await this.rateLimiter.consume();
+    return this.originalFunction(...args);
+  }
+
+  /**
+   * Get rate limiter status
+   */
+  getStatus() {
+    return {
+      availableTokens: this.rateLimiter.getAvailableTokens(),
+      timeUntilNextToken: this.rateLimiter.getTimeUntilNextToken(),
+    };
+  }
+}

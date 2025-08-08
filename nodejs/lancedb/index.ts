@@ -105,7 +105,7 @@ export {
   IntoVector,
   MultiVector,
 } from "./arrow";
-export { IntoSql, packBits } from "./util";
+export { IntoSql, packBits, RateLimitOptions, RateLimiter, RateLimitedFunction } from "./util";
 
 /**
  * Connect to a LanceDB instance at the given URI.

@@ -15,12 +15,15 @@ import {
   newVectorType,
 } from "../arrow";
 import { sanitizeType } from "../sanitize";
+import { RateLimitOptions, RateLimitedFunction } from "../util";
 import { getRegistry } from "./registry";
 
 /**
  * Options for a given embedding function
  */
 export interface FunctionOptions {
+  /** Rate limiting configuration for API calls */
+  rateLimit?: RateLimitOptions;
   // biome-ignore lint/suspicious/noExplicitAny: options can be anything
   [key: string]: any;
 }
@@ -63,6 +66,7 @@ export abstract class EmbeddingFunction<
   readonly TOptions!: M;
 
   #config: Partial<M>;
+  #rateLimitedFunction?: RateLimitedFunction<any>;
 
   /**
    * Get the original arguments to the constructor, to serialize them so they
@@ -130,6 +134,56 @@ export abstract class EmbeddingFunction<
    * or other resources that are needed for the embedding function to work.
    */
   async init?(): Promise<void>;
+
+  /**
+   * Create a rate-limited version of an API function.
+   * This should be called by subclasses that make API calls.
+   * 
+   * @param fn The function to rate limit
+   * @param options Rate limiting options (defaults to config.rateLimit)
+   * @returns Rate-limited function wrapper
+   */
+  protected createRateLimitedFunction<F extends (...args: any[]) => Promise<any>>(
+    fn: F,
+    options?: RateLimitOptions,
+  ): RateLimitedFunction<F> {
+    const rateLimitOptions = options || this.#config.rateLimit;
+    if (!rateLimitOptions) {
+      throw new Error("Rate limiting options not provided");
+    }
+    return new RateLimitedFunction(fn, rateLimitOptions);
+  }
+
+  /**
+   * Execute a function with rate limiting if configured.
+   * If no rate limiting is configured, executes the function directly.
+   * 
+   * @param fn The function to execute
+   * @param args Arguments to pass to the function
+   * @returns Promise resolving to the function result
+   */
+  protected async executeWithRateLimit<F extends (...args: any[]) => Promise<any>>(
+    fn: F,
+    ...args: Parameters<F>
+  ): Promise<Awaited<ReturnType<F>>> {
+    if (this.#config.rateLimit) {
+      if (!this.#rateLimitedFunction) {
+        this.#rateLimitedFunction = this.createRateLimitedFunction(fn);
+      }
+      return this.#rateLimitedFunction.execute(...args);
+    }
+    return fn(...args);
+  }
+
+  /**
+   * Get rate limiter status if rate limiting is enabled
+   */
+  getRateLimitStatus() {
+    if (this.#rateLimitedFunction) {
+      return this.#rateLimitedFunction.getStatus();
+    }
+    return null;
+  }
 
   /**
    * sourceField is used in combination with `LanceSchema` to provide a declarative data model
