@@ -69,6 +69,7 @@ pub struct IndexBuilder {
     parent: Arc<dyn BaseTable>,
     pub(crate) index: Index,
     pub(crate) columns: Vec<String>,
+    pub(crate) name: Option<String>,
     pub(crate) replace: bool,
     pub(crate) wait_timeout: Option<Duration>,
 }
@@ -79,16 +80,31 @@ impl IndexBuilder {
             parent,
             index,
             columns,
+            name: None,
             replace: true,
             wait_timeout: None,
         }
     }
 
-    /// Whether to replace the existing index, the default is `true`.
+    /// Set a custom name for the index.
     ///
-    /// If this is false, and another index already exists on the same columns
-    /// and the same name, then an error will be returned.  This is true even if
-    /// that index is out of date.
+    /// If not specified, a default name will be generated based on the column name
+    /// and index type. When multiple indexes exist on the same column, custom names
+    /// become important to distinguish between them.
+    ///
+    /// Index names must be unique within a table.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Whether to replace an existing index with the same name, the default is `true`.
+    ///
+    /// If this is false, and another index already exists with the same name,
+    /// then an error will be returned. This is true even if that index is out of date.
+    ///
+    /// Note: This now works based on index names rather than column names, allowing
+    /// multiple indexes per column with different names.
     pub fn replace(mut self, v: bool) -> Self {
         self.replace = v;
         self

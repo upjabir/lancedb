@@ -1653,7 +1653,7 @@ impl NativeTable {
         &self,
         index: IvfFlatIndexBuilder,
         field: &Field,
-        replace: bool,
+        opts: IndexBuilder,
     ) -> Result<()> {
         if !supported_vector_data_type(field.data_type()) {
             return Err(Error::InvalidInput {
@@ -1670,6 +1670,16 @@ impl NativeTable {
         } else {
             suggested_num_partitions(self.count_rows(None).await?)
         };
+        
+        let distance_type_str = match index.distance_type {
+            crate::DistanceType::L2 => "l2",
+            crate::DistanceType::Cosine => "cosine",
+            crate::DistanceType::Dot => "dot",
+            crate::DistanceType::Hamming => "hamming",
+        };
+        
+        let index_name = Self::get_index_name(&opts, field.name(), "ivf_flat", Some(distance_type_str));
+        
         let mut dataset = self.dataset.get_mut().await?;
         let lance_idx_params = lance::index::vector::VectorIndexParams::ivf_flat(
             num_partitions as usize,
@@ -1679,9 +1689,9 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::Vector,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
-                replace,
+                opts.replace,
             )
             .await?;
         Ok(())
@@ -1691,7 +1701,7 @@ impl NativeTable {
         &self,
         index: IvfPqIndexBuilder,
         field: &Field,
-        replace: bool,
+        opts: IndexBuilder,
     ) -> Result<()> {
         if !supported_vector_data_type(field.data_type()) {
             return Err(Error::InvalidInput {
@@ -1714,6 +1724,16 @@ impl NativeTable {
             let dim = infer_vector_dim(field.data_type())?;
             suggested_num_sub_vectors(dim as u32)
         };
+        
+        let distance_type_str = match index.distance_type {
+            crate::DistanceType::L2 => "l2",
+            crate::DistanceType::Cosine => "cosine",
+            crate::DistanceType::Dot => "dot",
+            crate::DistanceType::Hamming => "hamming",
+        };
+        
+        let index_name = Self::get_index_name(&opts, field.name(), "ivf_pq", Some(distance_type_str));
+        
         let mut dataset = self.dataset.get_mut().await?;
         let lance_idx_params = lance::index::vector::VectorIndexParams::ivf_pq(
             num_partitions as usize,
@@ -1726,9 +1746,9 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::Vector,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
-                replace,
+                opts.replace,
             )
             .await?;
         Ok(())
@@ -1738,7 +1758,7 @@ impl NativeTable {
         &self,
         index: IvfHnswPqIndexBuilder,
         field: &Field,
-        replace: bool,
+        opts: IndexBuilder,
     ) -> Result<()> {
         if !supported_vector_data_type(field.data_type()) {
             return Err(Error::InvalidInput {
@@ -1787,6 +1807,15 @@ impl NativeTable {
             num_sub_vectors: num_sub_vectors as usize,
             ..Default::default()
         };
+        let distance_type_str = match index.distance_type {
+            crate::DistanceType::L2 => "l2",
+            crate::DistanceType::Cosine => "cosine",
+            crate::DistanceType::Dot => "dot",
+            crate::DistanceType::Hamming => "hamming",
+        };
+        
+        let index_name = Self::get_index_name(&opts, field.name(), "ivf_hnsw_pq", Some(distance_type_str));
+        
         let lance_idx_params = lance::index::vector::VectorIndexParams::with_ivf_hnsw_pq_params(
             index.distance_type.into(),
             ivf_params,
@@ -1797,9 +1826,9 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::Vector,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
-                replace,
+                opts.replace,
             )
             .await?;
         Ok(())
@@ -1809,7 +1838,7 @@ impl NativeTable {
         &self,
         index: IvfHnswSqIndexBuilder,
         field: &Field,
-        replace: bool,
+        opts: IndexBuilder,
     ) -> Result<()> {
         if !supported_vector_data_type(field.data_type()) {
             return Err(Error::InvalidInput {
@@ -1845,6 +1874,15 @@ impl NativeTable {
             sample_rate: index.sample_rate as usize,
             ..Default::default()
         };
+        let distance_type_str = match index.distance_type {
+            crate::DistanceType::L2 => "l2",
+            crate::DistanceType::Cosine => "cosine",
+            crate::DistanceType::Dot => "dot",
+            crate::DistanceType::Hamming => "hamming",
+        };
+        
+        let index_name = Self::get_index_name(&opts, field.name(), "ivf_hnsw_sq", Some(distance_type_str));
+        
         let lance_idx_params = lance::index::vector::VectorIndexParams::with_ivf_hnsw_sq_params(
             index.distance_type.into(),
             ivf_params,
@@ -1855,9 +1893,9 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::Vector,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
-                replace,
+                opts.replace,
             )
             .await?;
         Ok(())
@@ -1865,7 +1903,7 @@ impl NativeTable {
 
     async fn create_auto_index(&self, field: &Field, opts: IndexBuilder) -> Result<()> {
         if supported_vector_data_type(field.data_type()) {
-            self.create_ivf_pq_index(IvfPqIndexBuilder::default(), field, opts.replace)
+            self.create_ivf_pq_index(IvfPqIndexBuilder::default(), field, opts)
                 .await
         } else if supported_btree_data_type(field.data_type()) {
             self.create_btree_index(field, opts).await
@@ -1891,6 +1929,8 @@ impl NativeTable {
             });
         }
 
+        let index_name = Self::get_index_name(&opts, field.name(), "btree", None);
+        
         let mut dataset = self.dataset.get_mut().await?;
         let lance_idx_params = lance_index::scalar::ScalarIndexParams {
             force_index_type: Some(lance_index::scalar::ScalarIndexType::BTree),
@@ -1899,7 +1939,7 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::BTree,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
                 opts.replace,
             )
@@ -1918,6 +1958,8 @@ impl NativeTable {
             });
         }
 
+        let index_name = Self::get_index_name(&opts, field.name(), "bitmap", None);
+        
         let mut dataset = self.dataset.get_mut().await?;
         let lance_idx_params = lance_index::scalar::ScalarIndexParams {
             force_index_type: Some(lance_index::scalar::ScalarIndexType::Bitmap),
@@ -1926,7 +1968,7 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::Bitmap,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
                 opts.replace,
             )
@@ -1945,6 +1987,8 @@ impl NativeTable {
             });
         }
 
+        let index_name = Self::get_index_name(&opts, field.name(), "label_list", None);
+        
         let mut dataset = self.dataset.get_mut().await?;
         let lance_idx_params = lance_index::scalar::ScalarIndexParams {
             force_index_type: Some(lance_index::scalar::ScalarIndexType::LabelList),
@@ -1953,7 +1997,7 @@ impl NativeTable {
             .create_index(
                 &[field.name()],
                 IndexType::LabelList,
-                None,
+                Some(&index_name),
                 &lance_idx_params,
                 opts.replace,
             )
@@ -1965,7 +2009,7 @@ impl NativeTable {
         &self,
         field: &Field,
         fts_opts: FtsIndexBuilder,
-        replace: bool,
+        opts: IndexBuilder,
     ) -> Result<()> {
         if !supported_fts_data_type(field.data_type()) {
             return Err(Error::Schema {
@@ -1977,14 +2021,16 @@ impl NativeTable {
             });
         }
 
+        let index_name = Self::get_index_name(&opts, field.name(), "fts", None);
+
         let mut dataset = self.dataset.get_mut().await?;
         dataset
             .create_index(
                 &[field.name()],
                 IndexType::Inverted,
-                None,
+                Some(&index_name),
                 &fts_opts,
-                replace,
+                opts.replace,
             )
             .await?;
         Ok(())
@@ -2192,6 +2238,21 @@ impl BaseTable for NativeTable {
         Ok(AddResult { version })
     }
 
+    /// Generate a default index name based on column name and index type
+    fn generate_index_name(column_name: &str, index_type: &str, distance_type: Option<&str>) -> String {
+        match distance_type {
+            Some(dt) => format!("{}_{}_idx_{}", column_name, index_type.to_lowercase(), dt),
+            None => format!("{}_idx", column_name),
+        }
+    }
+
+    /// Get the final index name, either from user input or generated default
+    fn get_index_name(opts: &IndexBuilder, column_name: &str, index_type: &str, distance_type: Option<&str>) -> String {
+        opts.name.clone().unwrap_or_else(|| {
+            Self::generate_index_name(column_name, index_type, distance_type)
+        })
+    }
+
     async fn create_index(&self, opts: IndexBuilder) -> Result<()> {
         if opts.columns.len() != 1 {
             return Err(Error::Schema {
@@ -2207,18 +2268,18 @@ impl BaseTable for NativeTable {
             Index::BTree(_) => self.create_btree_index(field, opts).await,
             Index::Bitmap(_) => self.create_bitmap_index(field, opts).await,
             Index::LabelList(_) => self.create_label_list_index(field, opts).await,
-            Index::FTS(fts_opts) => self.create_fts_index(field, fts_opts, opts.replace).await,
+            Index::FTS(fts_opts) => self.create_fts_index(field, fts_opts, opts).await,
             Index::IvfFlat(ivf_flat) => {
-                self.create_ivf_flat_index(ivf_flat, field, opts.replace)
+                self.create_ivf_flat_index(ivf_flat, field, opts)
                     .await
             }
-            Index::IvfPq(ivf_pq) => self.create_ivf_pq_index(ivf_pq, field, opts.replace).await,
+            Index::IvfPq(ivf_pq) => self.create_ivf_pq_index(ivf_pq, field, opts).await,
             Index::IvfHnswPq(ivf_hnsw_pq) => {
-                self.create_ivf_hnsw_pq_index(ivf_hnsw_pq, field, opts.replace)
+                self.create_ivf_hnsw_pq_index(ivf_hnsw_pq, field, opts)
                     .await
             }
             Index::IvfHnswSq(ivf_hnsw_sq) => {
-                self.create_ivf_hnsw_sq_index(ivf_hnsw_sq, field, opts.replace)
+                self.create_ivf_hnsw_sq_index(ivf_hnsw_sq, field, opts)
                     .await
             }
         }
